@@ -1,0 +1,18 @@
+# C&C Generals Localization Bridge
+# ------------------------------
+
+# Temporary Import Drop-Zone (Messy files go here)
+imports/*
+!imports/.gitkeep
+
+# Project Backups
+*.bak
+*.old
+
+# Python Metadata
+__pycache__/
+*.pyc
+
+# OS Related
+.DS_Store
+Thumbs.db

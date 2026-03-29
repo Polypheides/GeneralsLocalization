@@ -1,0 +1,113 @@
+name: STR-Fink Automated Bridge (Clean History)
+
+on:
+  push:
+    branches:
+      - main
+      - import
+    paths:
+      - 'imports/*.str'
+      - 'localization/*.json'
+  workflow_dispatch:
+    inputs:
+      language:
+        description: 'Language code to import (e.g., SV, DE, FR)'
+        required: true
+        default: 'SV'
+
+jobs:
+  process-str:
+    # Avoid infinite loops from bot-commits
+    if: "contains(github.event.head_commit.message, '[Automation]') == false"
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # --- CASE 1: STR Import from 'import' branch ---
+      # This pulls messy data from 'import', but then cleans and moves it to 'main'
+      - name: Surgical Import (Clean History)
+        if: github.ref == 'refs/heads/import'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 1. Identify what to import from the 'import' branch
+          for file in imports/*.str; do
+            if [ -f "$file" ]; then
+              lang=$(basename "$file" .str | tr '[:lower:]' '[:upper:]')
+              echo "Extracting $lang from $file..."
+              
+              # Run the import locally on the bot machine
+              python import_lang.py "$file" "$lang"
+            fi
+          done
+          
+          # 2. Rebuild the master generals.str
+          python json2str.py
+
+          # 3. Switch to 'main' branch to commit the CLEAN work
+          # We "carry" the changes (unstaged) over to main
+          git checkout main
+          git add localization/*.json generals.str
+          
+          if git diff --staged --quiet; then
+            echo "No clean changes detected."
+          else
+            git commit -m "[Automation] Synced clean strings to main"
+            git push origin main
+          fi
+          
+          # 4. RESET the 'import' branch back to 'main' to keep it clean
+          git checkout import
+          git reset --hard main
+          git push origin import --force
+
+      # --- CASE 2: Fink Web Syncer (on 'main' branch) ---
+      # When you edit in Fink, it pushes to main. We must rebuild the .str
+      - name: Fink Web Sync (Fink to STR)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 1. Rebuild the master generals.str
+          python json2str.py
+          
+          # 2. Commit and sync back to main
+          git add generals.str localization/*.json
+          if git diff --staged --quiet; then
+            echo "No changes needed."
+          else
+            git commit -m "[Automation] Rebuilt generals.str from Fink edits"
+            git push origin main
+          fi
+
+      # --- CASE 3: Manual Dispatch (Dashboard) ---
+      - name: Dashboard Language Import
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          lang="${{ github.event.inputs.language }}"
+          # Find the first .str in the imports folder
+          file=$(ls imports/*.str | head -n 1)
+          if [ -f "$file" ]; then
+            python import_lang.py "$file" "$lang"
+            python json2str.py
+            git checkout main
+            git add localization/*.json generals.str
+            git commit -m "[Automation] Manual Import: $lang"
+            git push origin main
+          fi
